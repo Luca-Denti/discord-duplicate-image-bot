@@ -32,6 +32,7 @@ class DuplicateBot {
 
         this.client.on(Events.MessageCreate, async (message) => {
             if (message.author.bot) return;
+            this.logDebugMessage(message);
             await this.handleMessage(message);
         });
 
@@ -84,6 +85,120 @@ class DuplicateBot {
             default:
                 break;
         }
+    }
+
+    logDebugMessage(message) {
+        if (!logger.isDebugEnabled()) return;
+
+        logger.debug('MessageCreate payload', {
+            payload: this.serializeMessageForDebug(message)
+        });
+    }
+
+    serializeMessageForDebug(message) {
+        return {
+            id: message.id,
+            content: message.content,
+            author: message.author ? {
+                id: message.author.id,
+                username: message.author.username,
+                globalName: message.author.globalName,
+                tag: message.author.tag,
+                bot: message.author.bot,
+                system: message.author.system
+            } : null,
+            guild: message.guild ? {
+                id: message.guild.id,
+                name: message.guild.name,
+                ownerId: message.guild.ownerId,
+                memberCount: message.guild.memberCount
+            } : null,
+            channel: message.channel ? {
+                id: message.channel.id,
+                name: message.channel.name,
+                type: message.channel.type,
+                parentId: message.channel.parentId,
+                guildId: message.channel.guildId
+            } : null,
+            attachments: this.serializeCollection(message.attachments, attachment => ({
+                id: attachment.id,
+                name: attachment.name,
+                description: attachment.description,
+                contentType: attachment.contentType,
+                size: attachment.size,
+                url: attachment.url,
+                proxyURL: attachment.proxyURL,
+                height: attachment.height,
+                width: attachment.width,
+                ephemeral: attachment.ephemeral,
+                duration: attachment.duration,
+                waveform: attachment.waveform,
+                flags: attachment.flags?.bitfield ?? null
+            })),
+            embeds: message.embeds.map(embed => embed.toJSON()),
+            stickers: this.serializeCollection(message.stickers, sticker => ({
+                id: sticker.id,
+                name: sticker.name,
+                description: sticker.description,
+                type: sticker.type,
+                format: sticker.format,
+                url: sticker.url,
+                guildId: sticker.guildId,
+                available: sticker.available
+            })),
+            mentions: {
+                everyone: message.mentions.everyone,
+                users: this.serializeCollection(message.mentions.users, user => ({
+                    id: user.id,
+                    username: user.username,
+                    globalName: user.globalName,
+                    tag: user.tag,
+                    bot: user.bot
+                })),
+                members: this.serializeCollection(message.mentions.members, member => ({
+                    id: member.id,
+                    displayName: member.displayName,
+                    nickname: member.nickname,
+                    userId: member.user?.id
+                })),
+                roles: this.serializeCollection(message.mentions.roles, role => ({
+                    id: role.id,
+                    name: role.name,
+                    color: role.color,
+                    position: role.position
+                })),
+                channels: this.serializeCollection(message.mentions.channels, channel => ({
+                    id: channel.id,
+                    name: channel.name,
+                    type: channel.type,
+                    guildId: channel.guildId
+                })),
+                repliedUser: message.mentions.repliedUser ? {
+                    id: message.mentions.repliedUser.id,
+                    username: message.mentions.repliedUser.username,
+                    tag: message.mentions.repliedUser.tag,
+                    bot: message.mentions.repliedUser.bot
+                } : null
+            },
+            components: message.components.map(component => component.toJSON()),
+            createdAt: message.createdAt?.toISOString() ?? null,
+            flags: {
+                bitfield: message.flags?.bitfield ?? null,
+                serialized: message.flags?.serialize?.() ?? null
+            },
+            reference: message.reference ? {
+                type: message.reference.type,
+                guildId: message.reference.guildId,
+                channelId: message.reference.channelId,
+                messageId: message.reference.messageId,
+                failIfNotExists: message.reference.failIfNotExists
+            } : null,
+            interactionMetadata: message.interactionMetadata?.toJSON?.() ?? message.interactionMetadata ?? null
+        };
+    }
+
+    serializeCollection(collection, serializeItem) {
+        return collection ? Array.from(collection.values(), serializeItem) : [];
     }
 
     async handleStatsCommand(interaction) {
@@ -151,12 +266,11 @@ class DuplicateBot {
         try {
             if (!message.guild) return;
 
-            if (!message.attachments.size && !this.hasImageUrls(message.content)) return;
-
             const images = await this.extractImages(message);
+            if (!images.length) return;
 
             for (const image of images) {
-                const hash = await this.imageHandler.generateHash(image.url);
+                const hash = await this.generateHashFromImage(image);
                 if (!hash) continue;
 
                 const duplicate = await this.findValidDuplicateOrReplaceStale(message, hash);
@@ -223,28 +337,100 @@ class DuplicateBot {
             attachment.url === imageUrl || attachment.proxyURL === imageUrl
         );
 
-        return attachmentStillExists || message.content.includes(imageUrl);
+        const embedStillExists = message.embeds.some(embed =>
+            this.getEmbedImageCandidates(embed).includes(imageUrl)
+        );
+
+        return attachmentStillExists || embedStillExists || message.content.includes(imageUrl);
     }
 
     hasImageUrls(content) {
-        const imageRegex = /https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp)/gi;
-        return imageRegex.test(content);
+        return this.extractImageUrlsFromContent(content).length > 0;
     }
 
     async extractImages(message) {
-        const images = [];
+        const images = new Map();
 
         message.attachments.forEach(attachment => {
             if (attachment.contentType?.startsWith('image/')) {
-                images.push({ url: attachment.url, type: 'attachment' });
+                this.addImageCandidate(images, attachment.url, 'attachment', [
+                    attachment.url,
+                    attachment.proxyURL
+                ]);
             }
         });
 
-        const urlRegex = /https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp)/gi;
-        const urls = message.content.match(urlRegex) || [];
-        urls.forEach(url => images.push({ url, type: 'url' }));
+        this.extractImageUrlsFromContent(message.content)
+            .forEach(url => this.addImageCandidate(images, url, 'url', [url]));
 
-        return images;
+        message.embeds.forEach(embed => {
+            const candidates = this.getEmbedImageCandidates(embed);
+            if (candidates.length > 0) {
+                this.addImageCandidate(images, candidates[0], 'embed', candidates);
+            }
+        });
+
+        return Array.from(images.values());
+    }
+
+    extractImageUrlsFromContent(content = '') {
+        const urlRegex = /https?:\/\/[^\s<>()]+/gi;
+        const urls = content.match(urlRegex) || [];
+        return urls
+            .map(url => url.replace(/[.,!?'"`]+$/g, ''))
+            .filter(url => this.isImageUrl(url));
+    }
+
+    isImageUrl(url) {
+        try {
+            const parsed = new URL(url);
+            return /\.(?:jpe?g|png|gif|webp)$/i.test(parsed.pathname);
+        } catch {
+            return false;
+        }
+    }
+
+    getEmbedImageCandidates(embed) {
+        const candidates = [
+            embed.image?.proxyURL,
+            embed.image?.url,
+            embed.thumbnail?.proxyURL,
+            embed.thumbnail?.url,
+            this.isImageUrl(embed.url) ? embed.url : null
+        ];
+
+        return [...new Set(candidates.filter(Boolean))];
+    }
+
+    addImageCandidate(images, url, type, candidates) {
+        const urls = [...new Set(candidates.filter(Boolean))];
+        if (!url || urls.length === 0) return;
+
+        const existingKey = [...images.entries()]
+            .find(([, image]) => image.url === url || image.urls.some(candidate => urls.includes(candidate)))
+            ?.[0];
+
+        if (existingKey) {
+            const existing = images.get(existingKey);
+            existing.urls = [...new Set([...urls, ...existing.urls])];
+            return;
+        }
+
+        images.set(url, { url, type, urls });
+    }
+
+    async generateHashFromImage(image) {
+        const urls = image.urls?.length ? image.urls : [image.url];
+
+        for (const url of urls) {
+            const hash = await this.imageHandler.generateHash(url, { silent: true });
+            if (hash) return hash;
+        }
+
+        logger.error(`Hash generation failed for all candidates for ${image.url}`, {
+            candidates: urls
+        });
+        return null;
     }
 
     async handleDuplicate(message, original, image) {
@@ -328,9 +514,8 @@ class DuplicateBot {
             for (const [, message] of messages) {
                 stats.messagesScanned++;
                 if (message.author.bot) continue;
-                if (!message.attachments.size && !this.hasImageUrls(message.content)) continue;
-
                 const images = await this.extractImages(message);
+                if (!images.length) continue;
                 stats.imagesFound += images.length;
 
                 for (const image of images) {
@@ -340,7 +525,7 @@ class DuplicateBot {
                             continue;
                         }
 
-                        const hash = await this.imageHandler.generateHash(image.url);
+                        const hash = await this.generateHashFromImage(image);
                         if (!hash) {
                             stats.failed++;
                             continue;

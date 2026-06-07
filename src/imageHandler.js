@@ -7,7 +7,7 @@ class ImageHandler {
         this.db = db;
     }
 
-    async generateHash(imageUrl) {
+    async generateHash(imageUrl, options = {}) {
         try {
             // Download the image and generate the hash.
             const response = await fetch(imageUrl);
@@ -32,7 +32,9 @@ class ImageHandler {
             return hash;
 
         } catch (error) {
-            logger.error(`Hash generation error for ${imageUrl}:`, error);
+            if (!options.silent) {
+                logger.error(`Hash generation error for ${imageUrl}:`, error);
+            }
             return null;
         }
     }
