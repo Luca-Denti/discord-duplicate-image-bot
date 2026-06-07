@@ -134,6 +134,22 @@ class DatabaseManager {
         return stmt.run(data);
     }
 
+    deleteImage(imageId) {
+        const deleteDuplicateLogs = this.db.prepare(`
+            DELETE FROM duplicates
+            WHERE original_id = ?
+        `);
+        const deleteImageRecord = this.db.prepare(`
+            DELETE FROM images
+            WHERE id = ?
+        `);
+
+        return this.db.transaction((id) => {
+            deleteDuplicateLogs.run(id);
+            return deleteImageRecord.run(id);
+        })(imageId);
+    }
+
     getStats(guildId) {
         const totalImages = this.db.prepare('SELECT COUNT(*) as count FROM images WHERE guild_id = ?').get(guildId);
         const totalDuplicates = this.db.prepare(`

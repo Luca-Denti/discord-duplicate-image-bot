@@ -159,7 +159,7 @@ class DuplicateBot {
                 const hash = await this.imageHandler.generateHash(image.url);
                 if (!hash) continue;
 
-                const duplicate = await this.imageHandler.findDuplicate(hash, message.guild.id);
+                const duplicate = await this.findValidDuplicateOrReplaceStale(message, hash);
 
                 if (duplicate) {
                     await this.handleDuplicate(message, duplicate, image);
@@ -177,6 +177,53 @@ class DuplicateBot {
         } catch (error) {
             logger.error('Message handling error:', error);
         }
+    }
+
+    async findValidDuplicateOrReplaceStale(message, hash) {
+        const maxStaleRecordsToClean = 10;
+
+        for (let attempts = 0; attempts < maxStaleRecordsToClean; attempts++) {
+            const duplicate = await this.imageHandler.findDuplicate(hash, message.guild.id);
+            if (!duplicate) return null;
+
+            const originalExists = await this.originalImageExists(message.guild, duplicate);
+            if (originalExists) return duplicate;
+
+            const result = this.db.deleteImage(duplicate.id);
+            logger.info(
+                `Removed stale image record ${duplicate.id} for deleted or changed message ${duplicate.message_id}; deleted rows: ${result.changes}`
+            );
+        }
+
+        logger.warn(`Stopped stale duplicate cleanup after ${maxStaleRecordsToClean} records for guild ${message.guild.id}`);
+        return null;
+    }
+
+    async originalImageExists(guild, original) {
+        try {
+            const channel = await guild.channels.fetch(original.channel_id);
+            if (!channel?.isTextBased() || !channel.messages?.fetch) return false;
+
+            const originalMessage = await channel.messages.fetch(original.message_id);
+            if (!original.url) return Boolean(originalMessage);
+
+            return this.messageStillContainsImage(originalMessage, original.url);
+        } catch (error) {
+            if (error.code === 10003 || error.code === 10008) return false;
+
+            logger.warn(
+                `Could not verify original image ${original.id} in channel ${original.channel_id}, message ${original.message_id}: ${error.message}`
+            );
+            return true;
+        }
+    }
+
+    messageStillContainsImage(message, imageUrl) {
+        const attachmentStillExists = message.attachments.some(attachment =>
+            attachment.url === imageUrl || attachment.proxyURL === imageUrl
+        );
+
+        return attachmentStillExists || message.content.includes(imageUrl);
     }
 
     hasImageUrls(content) {
