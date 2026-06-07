@@ -9,7 +9,7 @@ class ImageHandler {
 
     async generateHash(imageUrl) {
         try {
-            // Scarica l'immagine e genera hash
+            // Download the image and generate the hash.
             const response = await fetch(imageUrl);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -18,32 +18,32 @@ class ImageHandler {
             const buffer = await response.arrayBuffer();
             const imageBuffer = Buffer.from(buffer);
 
-            // Usa sharp per preprocessing
+            // Use sharp for preprocessing.
             const processedImage = await sharp(imageBuffer)
                 .resize(32, 32, { fit: 'fill' })
                 .grayscale()
-                .raw()
+                .png()
                 .toBuffer();
 
-            // Genera pHash usando image-hash
+            // Generate pHash using image-hash.
             const hash = await this.computePhash(processedImage);
             
-            logger.debug(`Hash generato: ${hash}`);
+            logger.debug(`Hash generated: ${hash}`);
             return hash;
 
         } catch (error) {
-            logger.error(`Errore generazione hash per ${imageUrl}:`, error);
+            logger.error(`Hash generation error for ${imageUrl}:`, error);
             return null;
         }
     }
 
     async computePhash(imageBuffer) {
-        // Implementazione semplificata di pHash
-        // Per una implementazione completa, usa una libreria dedicata
+        // Simplified pHash implementation.
+        // For a complete implementation, use a dedicated library.
         return new Promise((resolve, reject) => {
             try {
                 imageHash.imageHash(
-                    { data: imageBuffer, width: 32, height: 32 },
+                    { data: imageBuffer, name: 'image.png' },
                     16,
                     'hex',
                     (error, hash) => {
@@ -57,21 +57,21 @@ class ImageHandler {
         });
     }
 
-    async findDuplicate(hash, guildId) {
+    async findDuplicate(hash, guildId, threshold = null) {
         try {
-            // Cerca hash simili nel database
+            // Search for similar hashes in the database.
             const candidates = this.db.findByHashPrefix(hash, guildId);
             
             if (!candidates || candidates.length === 0) {
                 return null;
             }
 
-            // Calcola Hamming distance per ogni candidato
+            // Calculate Hamming distance for each candidate.
             for (const candidate of candidates) {
                 const distance = this.hammingDistance(hash, candidate.hash);
-                const threshold = parseInt(process.env.HASH_THRESHOLD) || 8;
+                const effectiveThreshold = threshold ?? (parseInt(process.env.HASH_THRESHOLD, 10) || 8);
 
-                if (distance <= threshold) {
+                if (distance <= effectiveThreshold) {
                     return {
                         ...candidate,
                         similarity: Math.round((1 - distance / 64) * 100)
@@ -82,7 +82,7 @@ class ImageHandler {
             return null;
 
         } catch (error) {
-            logger.error('Errore ricerca duplicato:', error);
+            logger.error('Duplicate search error:', error);
             return null;
         }
     }
@@ -107,7 +107,7 @@ class ImageHandler {
         try {
             return this.db.saveImage(data);
         } catch (error) {
-            logger.error('Errore salvataggio immagine:', error);
+            logger.error('Image save error:', error);
             throw error;
         }
     }

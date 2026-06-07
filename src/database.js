@@ -1,16 +1,18 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 const logger = require('./logger');
 
 class DatabaseManager {
     constructor() {
         const dbPath = process.env.DATABASE_PATH || './data/images.db';
+        fs.mkdirSync(path.dirname(dbPath), { recursive: true });
         this.db = new Database(dbPath);
         this.init();
     }
 
     init() {
-        // Tabella immagini
+        // Images table
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,17 +26,23 @@ class DatabaseManager {
             )
         `);
 
-        // Indice per ricerca rapida hash
+        // Index for fast hash lookup
         this.db.exec(`
             CREATE INDEX IF NOT EXISTS idx_images_hash ON images(hash)
         `);
 
-        // Indice per guild
+        // Guild index
         this.db.exec(`
             CREATE INDEX IF NOT EXISTS idx_images_guild ON images(guild_id)
         `);
 
-        // Tabella progresso importazione
+        // Index to avoid slow scans during incremental re-imports
+        this.db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_images_message_url
+            ON images(guild_id, message_id, url)
+        `);
+
+        // Import progress table
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS import_progress (
                 guild_id TEXT PRIMARY KEY,
@@ -45,7 +53,7 @@ class DatabaseManager {
             )
         `);
 
-        // Tabella duplicati
+        // Duplicates table
         this.db.exec(`
             CREATE TABLE IF NOT EXISTS duplicates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,10 +66,14 @@ class DatabaseManager {
             )
         `);
 
-        logger.info('Database inizializzato con successo');
+        logger.info('Database initialized successfully');
     }
 
     saveImage(data) {
+        if (this.imageExists(data.guildId, data.messageId, data.url)) {
+            return { changes: 0, lastInsertRowid: null };
+        }
+
         const stmt = this.db.prepare(`
             INSERT INTO images (hash, guild_id, channel_id, message_id, author_id, url)
             VALUES (@hash, @guildId, @channelId, @messageId, @authorId, @url)
@@ -70,9 +82,22 @@ class DatabaseManager {
         return stmt.run(data);
     }
 
+    imageExists(guildId, messageId, url) {
+        const stmt = this.db.prepare(`
+            SELECT 1
+            FROM images
+            WHERE guild_id = ?
+                AND message_id = ?
+                AND COALESCE(url, '') = COALESCE(?, '')
+            LIMIT 1
+        `);
+
+        return Boolean(stmt.get(guildId, messageId, url));
+    }
+
     findSimilarHash(hash, guildId, threshold = 8) {
-        // Per Hamming distance, usiamo una query che confronta i bit
-        // Nota: SQLite non ha funzioni bitwise native, quindi usiamo un approccio semplificato
+        // For Hamming distance, use a query that compares bits.
+        // SQLite has no native bitwise functions, so this uses a simplified approach.
         const stmt = this.db.prepare(`
             SELECT *, hamming_distance(hash, ?) as distance
             FROM images
@@ -85,9 +110,9 @@ class DatabaseManager {
         return stmt.get(hash, guildId, threshold);
     }
 
-    // Metodo alternativo senza funzione custom
+    // Alternative method without a custom function
     findByHashPrefix(hash, guildId) {
-        // Usa i primi 8 caratteri come pre-filtro veloce
+        // Use the first 8 characters as a fast pre-filter.
         const prefix = hash.substring(0, 8);
         const stmt = this.db.prepare(`
             SELECT * FROM images
@@ -111,7 +136,12 @@ class DatabaseManager {
 
     getStats(guildId) {
         const totalImages = this.db.prepare('SELECT COUNT(*) as count FROM images WHERE guild_id = ?').get(guildId);
-        const totalDuplicates = this.db.prepare('SELECT COUNT(*) as count FROM duplicates WHERE duplicate_message_id IN (SELECT message_id FROM images WHERE guild_id = ?)').get(guildId);
+        const totalDuplicates = this.db.prepare(`
+            SELECT COUNT(*) as count
+            FROM duplicates d
+            JOIN images i ON d.original_id = i.id
+            WHERE i.guild_id = ?
+        `).get(guildId);
         
         return {
             totalImages: totalImages.count,

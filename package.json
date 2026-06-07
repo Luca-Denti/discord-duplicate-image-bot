@@ -1,7 +1,7 @@
 {
   "name": "discord-duplicate-bot",
   "version": "1.0.0",
-  "description": "Bot Discord per rilevamento immagini duplicate tramite pHash",
+  "description": "Discord bot for duplicate image detection using pHash",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -12,7 +12,7 @@
     "discord.js": "^14.14.1",
     "sharp": "^0.33.1",
     "image-hash": "^5.3.2",
-    "better-sqlite3": "^9.4.3",
+    "better-sqlite3": "^12.10.0",
     "dotenv": "^16.4.5",
     "winston": "^3.11.0"
   },
@@ -21,7 +21,7 @@
     "jest": "^29.7.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "20.x || 22.x || 24.x"
   },
   "keywords": [
     "discord",

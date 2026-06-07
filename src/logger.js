@@ -17,7 +17,7 @@ const logger = winston.createLogger({
     ]
 });
 
-// Se non siamo in produzione, logga anche su console
+// In non-production environments, also log to the console.
 if (process.env.NODE_ENV !== 'production') {
     logger.add(new winston.transports.Console({
         format: winston.format.combine(
