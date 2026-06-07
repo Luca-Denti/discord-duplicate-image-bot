@@ -46,7 +46,6 @@ LOG_LEVEL=info
 
 | Command | Description | Permissions |
 |---------|-------------|-------------|
-| `/dupconfig` | Configure threshold and actions | Admin |
 | `/dupstats` | Duplicate statistics | Admin |
 | `/dupimport` | Re-import images | Admin |
 | `/duplogs` | Latest detected duplicates | Admin |
