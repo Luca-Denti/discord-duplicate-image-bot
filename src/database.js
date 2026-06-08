@@ -2,12 +2,13 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 const logger = require('./logger');
+const { hammingDistance } = require('./hashUtils');
 
 class DatabaseManager {
-    constructor() {
-        const dbPath = process.env.DATABASE_PATH || './data/images.db';
+    constructor(dbPath = process.env.DATABASE_PATH || './data/images.db') {
         fs.mkdirSync(path.dirname(dbPath), { recursive: true });
         this.db = new Database(dbPath);
+        this.db.function('hamming_distance', { deterministic: true }, hammingDistance);
         this.init();
     }
 
@@ -96,32 +97,19 @@ class DatabaseManager {
     }
 
     findSimilarHash(hash, guildId, threshold = 8) {
-        // For Hamming distance, use a query that compares bits.
-        // SQLite has no native bitwise functions, so this uses a simplified approach.
         const stmt = this.db.prepare(`
-            SELECT *, hamming_distance(hash, ?) as distance
-            FROM images
-            WHERE guild_id = ?
-            HAVING distance <= ?
-            ORDER BY distance
+            SELECT *
+            FROM (
+                SELECT images.*, hamming_distance(hash, ?) AS distance
+                FROM images
+                WHERE guild_id = ?
+            )
+            WHERE distance <= ?
+            ORDER BY distance ASC, created_at DESC
             LIMIT 1
         `);
         
         return stmt.get(hash, guildId, threshold);
-    }
-
-    // Alternative method without a custom function
-    findByHashPrefix(hash, guildId) {
-        // Use the first 8 characters as a fast pre-filter.
-        const prefix = hash.substring(0, 8);
-        const stmt = this.db.prepare(`
-            SELECT * FROM images
-            WHERE guild_id = ? AND hash LIKE ?
-            ORDER BY created_at DESC
-            LIMIT 10
-        `);
-        
-        return stmt.all(guildId, `${prefix}%`);
     }
 
     logDuplicate(data) {
