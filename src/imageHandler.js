@@ -1,6 +1,5 @@
 const sharp = require('sharp');
 const imageHash = require('image-hash');
-const logger = require('./logger');
 const { hammingDistance } = require('./hashUtils');
 
 class ImageHandler {
@@ -28,14 +27,9 @@ class ImageHandler {
 
             // Generate pHash using image-hash.
             const hash = await this.computePhash(processedImage);
-            
-            logger.debug(`Hash generated: ${hash}`);
             return hash;
 
         } catch (error) {
-            if (!options.silent) {
-                logger.error(`Hash generation error for ${imageUrl}:`, error);
-            }
             return null;
         }
     }
@@ -60,10 +54,10 @@ class ImageHandler {
         });
     }
 
-    async findDuplicate(hash, guildId, threshold = null) {
+    async findDuplicate(hash, guildId, threshold = null, options = {}) {
         try {
             const effectiveThreshold = threshold ?? (parseInt(process.env.HASH_THRESHOLD, 10) || 8);
-            const candidate = this.db.findSimilarHash(hash, guildId, effectiveThreshold);
+            const candidate = this.db.findSimilarHash(hash, guildId, effectiveThreshold, options);
 
             if (!candidate) return null;
 
@@ -74,7 +68,6 @@ class ImageHandler {
             };
 
         } catch (error) {
-            logger.error('Duplicate search error:', error);
             return null;
         }
     }
@@ -87,7 +80,6 @@ class ImageHandler {
         try {
             return this.db.saveImage(data);
         } catch (error) {
-            logger.error('Image save error:', error);
             throw error;
         }
     }

@@ -39,10 +39,9 @@ Copy `.env.example` to `.env` and configure:
 DISCORD_TOKEN=your_token
 DATABASE_PATH=./data/images.db
 HASH_THRESHOLD=8
-LOG_LEVEL=info
 ```
 
-Set `LOG_LEVEL=debug` to write a full debug trace for every live message analyzed, including the serialized Discord payload, extracted image candidates, generated hashes, duplicate matches, non-duplicate saves, and skipped messages.
+Each server import writes only start and completion events to `logs/import-<serverId>.log`, including imports triggered when the bot starts.
 
 ## Commands
 

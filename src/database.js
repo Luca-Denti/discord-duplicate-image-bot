@@ -1,7 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
-const logger = require('./logger');
 const { hammingDistance } = require('./hashUtils');
 
 class DatabaseManager {
@@ -66,8 +65,6 @@ class DatabaseManager {
                 detected_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
-
-        logger.info('Database initialized successfully');
     }
 
     saveImage(data) {
@@ -96,20 +93,32 @@ class DatabaseManager {
         return Boolean(stmt.get(guildId, messageId, url));
     }
 
-    findSimilarHash(hash, guildId, threshold = 8) {
+    findSimilarHash(hash, guildId, threshold = 8, options = {}) {
+        const filters = ['guild_id = @guildId'];
+        const params = {
+            hash,
+            guildId,
+            threshold
+        };
+
+        if (options.excludeMessageId) {
+            filters.push('message_id != @excludeMessageId');
+            params.excludeMessageId = options.excludeMessageId;
+        }
+
         const stmt = this.db.prepare(`
             SELECT *
             FROM (
-                SELECT images.*, hamming_distance(hash, ?) AS distance
+                SELECT images.*, hamming_distance(hash, @hash) AS distance
                 FROM images
-                WHERE guild_id = ?
+                WHERE ${filters.join(' AND ')}
             )
-            WHERE distance <= ?
+            WHERE distance <= @threshold
             ORDER BY distance ASC, created_at DESC
             LIMIT 1
         `);
-        
-        return stmt.get(hash, guildId, threshold);
+
+        return stmt.get(params);
     }
 
     logDuplicate(data) {

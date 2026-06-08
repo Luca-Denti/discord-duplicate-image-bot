@@ -59,4 +59,48 @@ describe('duplicate search', () => {
         expect(duplicate.message_id).toBe('distance-1');
         expect(duplicate.distance).toBe(1);
     });
+
+    test('can exclude images from the message currently being processed', async () => {
+        database.saveImage({
+            hash: 'f007e147',
+            guildId: 'guild-1',
+            channelId: 'channel-1',
+            messageId: 'current-message',
+            authorId: 'author-1',
+            url: 'https://example.com/current.png'
+        });
+        database.saveImage({
+            hash: 'f007e147',
+            guildId: 'guild-1',
+            channelId: 'channel-1',
+            messageId: 'other-message',
+            authorId: 'author-1',
+            url: 'https://example.com/other.png'
+        });
+
+        const handler = new ImageHandler(database);
+        const duplicate = await handler.findDuplicate('f007e147', 'guild-1', 0, {
+            excludeMessageId: 'current-message'
+        });
+
+        expect(duplicate.message_id).toBe('other-message');
+    });
+
+    test('does not report a duplicate when only the current message matches', async () => {
+        database.saveImage({
+            hash: 'f007e147',
+            guildId: 'guild-1',
+            channelId: 'channel-1',
+            messageId: 'current-message',
+            authorId: 'author-1',
+            url: 'https://example.com/current.png'
+        });
+
+        const handler = new ImageHandler(database);
+        const duplicate = await handler.findDuplicate('f007e147', 'guild-1', 0, {
+            excludeMessageId: 'current-message'
+        });
+
+        expect(duplicate).toBeNull();
+    });
 });

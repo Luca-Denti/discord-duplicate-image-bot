@@ -1,7 +1,8 @@
 const { Client, GatewayIntentBits, Partials, Events } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
 const Database = require('./database');
 const ImageHandler = require('./imageHandler');
-const logger = require('./logger');
 const { commands } = require('./commands');
 const { imageUrlsMatch } = require('./urlUtils');
 require('dotenv').config();
@@ -21,14 +22,15 @@ class DuplicateBot {
         this.db = new Database();
         this.imageHandler = new ImageHandler(this.db);
         this.importLocks = new Set();
+        this.logDirectory = process.env.LOG_DIR || './logs';
 
         this.setupEventHandlers();
     }
 
     setupEventHandlers() {
         this.client.once(Events.ClientReady, async () => {
-            logger.info(`Bot started as ${this.client.user.tag}`);
             await this.registerCommands();
+            await this.importStartupGuilds();
         });
 
         this.client.on(Events.MessageCreate, async (message) => {
@@ -43,9 +45,8 @@ class DuplicateBot {
         });
 
         this.client.on(Events.GuildCreate, async (guild) => {
-            logger.info(`Added to server: ${guild.name}`);
             await this.registerGuildCommands(guild);
-            await this.importExistingImages(guild);
+            await this.importExistingImages(guild, { trigger: 'guildCreate' });
         });
     }
 
@@ -55,12 +56,16 @@ class DuplicateBot {
         }
     }
 
+    async importStartupGuilds() {
+        for (const [, guild] of this.client.guilds.cache) {
+            await this.importExistingImages(guild, { trigger: 'bot_startup' });
+        }
+    }
+
     async registerGuildCommands(guild) {
         try {
             await guild.commands.set(commands.map(command => command.toJSON()));
-            logger.info(`Commands synchronized for ${guild.name}`);
         } catch (error) {
-            logger.error(`Command synchronization error for ${guild.name}:`, error);
         }
     }
 
@@ -89,21 +94,71 @@ class DuplicateBot {
     }
 
     logDebugMessage(message, event = 'message') {
-        if (!logger.isDebugEnabled()) return;
-
-        logger.debug('Discord message payload', {
-            event,
-            payload: this.serializeMessageForDebug(message)
-        });
     }
 
     logDebugMessageAnalysis(message, status, details = {}) {
-        if (!logger.isDebugEnabled()) return;
+    }
 
-        logger.debug('Message analysis', {
-            status,
-            details,
-            payload: this.serializeMessageForDebug(message)
+    logServerImportEvent(guild, event, details = {}) {
+        const guildId = guild?.id || details.guildId || 'unknown-guild';
+        const entry = {
+            timestamp: new Date().toISOString(),
+            event,
+            guildId,
+            guildName: guild?.name || null,
+            trigger: details.trigger || null,
+            channelCount: details.channelCount ?? null,
+            stats: details.stats || null,
+            error: details.error || null
+        };
+
+        const line = this.stringifyLogEntry(entry);
+        console.log(line);
+        this.writeJsonLine(this.getImportLogPath(guildId), entry);
+    }
+
+    getImportLogPath(guildId) {
+        const safeGuildId = this.sanitizeLogFilePart(guildId || 'unknown-guild');
+        return path.join(this.logDirectory || './logs', `import-${safeGuildId}.log`);
+    }
+
+    sanitizeLogFilePart(value) {
+        return String(value).replace(/[^a-zA-Z0-9._-]/g, '_');
+    }
+
+    writeJsonLine(filePath, entry) {
+        try {
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.appendFileSync(filePath, `${this.stringifyLogEntry(entry)}\n`, 'utf8');
+        } catch (error) {
+        }
+    }
+
+    ensureLogFile(filePath) {
+        try {
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.closeSync(fs.openSync(filePath, 'a'));
+        } catch (error) {
+        }
+    }
+
+    stringifyLogEntry(entry) {
+        const seen = new WeakSet();
+        return JSON.stringify(entry, (key, value) => {
+            if (typeof value === 'bigint') return value.toString();
+            if (value instanceof Error) {
+                return {
+                    name: value.name,
+                    message: value.message,
+                    code: value.code,
+                    stack: value.stack
+                };
+            }
+            if (value && typeof value === 'object') {
+                if (seen.has(value)) return '[Circular]';
+                seen.add(value);
+            }
+            return value;
         });
     }
 
@@ -147,7 +202,7 @@ class DuplicateBot {
                 waveform: attachment.waveform,
                 flags: attachment.flags?.bitfield ?? null
             })),
-            embeds: message.embeds.map(embed => embed.toJSON()),
+            embeds: (message.embeds || []).map(embed => embed.toJSON?.() ?? embed),
             stickers: this.serializeCollection(message.stickers, sticker => ({
                 id: sticker.id,
                 name: sticker.name,
@@ -159,40 +214,40 @@ class DuplicateBot {
                 available: sticker.available
             })),
             mentions: {
-                everyone: message.mentions.everyone,
-                users: this.serializeCollection(message.mentions.users, user => ({
+                everyone: message.mentions?.everyone ?? false,
+                users: this.serializeCollection(message.mentions?.users, user => ({
                     id: user.id,
                     username: user.username,
                     globalName: user.globalName,
                     tag: user.tag,
                     bot: user.bot
                 })),
-                members: this.serializeCollection(message.mentions.members, member => ({
+                members: this.serializeCollection(message.mentions?.members, member => ({
                     id: member.id,
                     displayName: member.displayName,
                     nickname: member.nickname,
                     userId: member.user?.id
                 })),
-                roles: this.serializeCollection(message.mentions.roles, role => ({
+                roles: this.serializeCollection(message.mentions?.roles, role => ({
                     id: role.id,
                     name: role.name,
                     color: role.color,
                     position: role.position
                 })),
-                channels: this.serializeCollection(message.mentions.channels, channel => ({
+                channels: this.serializeCollection(message.mentions?.channels, channel => ({
                     id: channel.id,
                     name: channel.name,
                     type: channel.type,
                     guildId: channel.guildId
                 })),
-                repliedUser: message.mentions.repliedUser ? {
+                repliedUser: message.mentions?.repliedUser ? {
                     id: message.mentions.repliedUser.id,
                     username: message.mentions.repliedUser.username,
                     tag: message.mentions.repliedUser.tag,
                     bot: message.mentions.repliedUser.bot
                 } : null
             },
-            components: message.components.map(component => component.toJSON()),
+            components: (message.components || []).map(component => component.toJSON?.() ?? component),
             createdAt: message.createdAt?.toISOString() ?? null,
             flags: {
                 bitfield: message.flags?.bitfield ?? null,
@@ -228,7 +283,14 @@ class DuplicateBot {
     }
 
     serializeCollection(collection, serializeItem) {
-        return collection ? Array.from(collection.values(), serializeItem) : [];
+        if (!collection) return [];
+        if (typeof collection.values === 'function') {
+            return Array.from(collection.values(), serializeItem);
+        }
+        if (Array.isArray(collection)) {
+            return collection.map(serializeItem);
+        }
+        return [];
     }
 
     async handleStatsCommand(interaction) {
@@ -257,12 +319,10 @@ class DuplicateBot {
         await interaction.deferReply({ ephemeral: true });
 
         try {
-            const stats = await this.importExistingImages(interaction.guild);
-            await interaction.editReply(
-                `Import complete. Images found: ${stats.imagesFound}, added: ${stats.added}, already present: ${stats.skipped}, errors: ${stats.failed}.`
-            );
+            const stats = await this.importExistingImages(interaction.guild, { trigger: 'dupimport_command' });
+            const message = `Import complete. Images found: ${stats.imagesFound}, added: ${stats.added}, already present: ${stats.skipped}, errors: ${stats.failed}.`;
+            await interaction.editReply(`${message}\nLog file: ${this.getImportLogPath(interaction.guild.id)}`);
         } catch (error) {
-            logger.error('dupimport command error:', error);
             await interaction.editReply('Import did not complete: check the bot logs.');
         } finally {
             this.importLocks.delete(guildId);
@@ -352,7 +412,6 @@ class DuplicateBot {
                 }
             }
         } catch (error) {
-            logger.error('Message handling error:', error);
         }
     }
 
@@ -360,23 +419,21 @@ class DuplicateBot {
         const maxStaleRecordsToClean = 10;
 
         for (let attempts = 0; attempts < maxStaleRecordsToClean; attempts++) {
-            const duplicate = await this.imageHandler.findDuplicate(hash, message.guild.id);
+            const duplicate = await this.imageHandler.findDuplicate(hash, message.guild.id, null, {
+                excludeMessageId: message.id
+            });
             if (!duplicate) return null;
 
-            const originalExists = await this.originalImageExists(message.guild, duplicate);
+            const originalExists = await this.originalImageExists(message.guild, duplicate, hash);
             if (originalExists) return duplicate;
 
-            const result = this.db.deleteImage(duplicate.id);
-            logger.info(
-                `Removed stale image record ${duplicate.id} for deleted or changed message ${duplicate.message_id}; deleted rows: ${result.changes}`
-            );
+            this.db.deleteImage(duplicate.id);
         }
 
-        logger.warn(`Stopped stale duplicate cleanup after ${maxStaleRecordsToClean} records for guild ${message.guild.id}`);
         return null;
     }
 
-    async originalImageExists(guild, original) {
+    async originalImageExists(guild, original, comparisonHash = null) {
         try {
             const channel = await guild.channels.fetch(original.channel_id);
             if (!channel?.isTextBased() || !channel.messages?.fetch) return false;
@@ -384,13 +441,12 @@ class DuplicateBot {
             const originalMessage = await channel.messages.fetch(original.message_id);
             if (!original.url) return Boolean(originalMessage);
 
-            return this.messageStillContainsImage(originalMessage, original.url);
+            if (this.messageStillContainsImage(originalMessage, original.url)) return true;
+
+            return this.messageStillContainsSimilarImage(originalMessage, original, comparisonHash);
         } catch (error) {
             if (error.code === 10003 || error.code === 10008) return false;
 
-            logger.warn(
-                `Could not verify original image ${original.id} in channel ${original.channel_id}, message ${original.message_id}: ${error.message}`
-            );
             return true;
         }
     }
@@ -411,6 +467,27 @@ class DuplicateBot {
             .some(candidate => imageUrlsMatch(candidate, imageUrl));
 
         return attachmentStillExists || embedStillExists || contentStillContainsImage;
+    }
+
+    async messageStillContainsSimilarImage(message, original, comparisonHash = null) {
+        const images = await this.extractImages(message);
+        if (!images.length) return false;
+
+        const threshold = parseInt(process.env.HASH_THRESHOLD, 10) || 8;
+        const referenceHashes = [original.hash, comparisonHash].filter(Boolean);
+
+        for (const image of images) {
+            const hash = await this.generateHashFromImage(image);
+            if (!hash) continue;
+
+            if (referenceHashes.some(referenceHash =>
+                this.imageHandler.hammingDistance(hash, referenceHash) <= threshold
+            )) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     hasImageUrls(content) {
@@ -496,9 +573,6 @@ class DuplicateBot {
             if (hash) return hash;
         }
 
-        logger.error(`Hash generation failed for all candidates for ${image.url}`, {
-            candidates: urls
-        });
         return null;
     }
 
@@ -532,15 +606,20 @@ class DuplicateBot {
                 similarityScore: original.similarity
             });
         } catch (error) {
-            logger.error('Duplicate handling error:', error);
         }
     }
 
-    async importExistingImages(guild) {
-        logger.info(`Starting import for ${guild.name}`);
+    async importExistingImages(guild, options = {}) {
+        this.ensureLogFile(this.getImportLogPath(guild.id));
+
         const channels = guild.channels.cache.filter(ch =>
             ch.isTextBased() && !ch.isVoiceBased() && ch.messages?.fetch
         );
+        this.logServerImportEvent(guild, 'server_import_start', {
+            trigger: options.trigger || 'direct',
+            channelCount: channels.size
+        });
+
         const totals = {
             messagesScanned: 0,
             imagesFound: 0,
@@ -558,9 +637,12 @@ class DuplicateBot {
             totals.failed += stats.failed;
         }
 
-        logger.info(
-            `Import completed for ${guild.name}: ${totals.added} added, ${totals.skipped} already present, ${totals.failed} errors`
-        );
+        this.logServerImportEvent(guild, 'server_import_complete', {
+            trigger: options.trigger || 'direct',
+            channelCount: channels.size,
+            stats: totals
+        });
+
         return totals;
     }
 
@@ -617,7 +699,6 @@ class DuplicateBot {
                         }
                     } catch (error) {
                         stats.failed++;
-                        logger.error(`Image import error for ${image.url}:`, error);
                     }
                 }
             }
@@ -633,7 +714,6 @@ class DuplicateBot {
             }
         } catch (error) {
             stats.failed++;
-            logger.error(`Import error for ${channel.name}:`, error);
         }
 
         return stats;
@@ -649,10 +729,12 @@ class DuplicateBot {
     }
 }
 
-const bot = new DuplicateBot();
-bot.start();
+if (require.main === module) {
+    const bot = new DuplicateBot();
+    bot.start();
 
-process.on('SIGINT', () => bot.stop());
-process.on('SIGTERM', () => bot.stop());
+    process.on('SIGINT', () => bot.stop());
+    process.on('SIGTERM', () => bot.stop());
+}
 
 module.exports = DuplicateBot;

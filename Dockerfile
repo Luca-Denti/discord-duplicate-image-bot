@@ -25,7 +25,6 @@ RUN mkdir -p data logs
 # Default environment variables
 ENV NODE_ENV=production
 ENV DATABASE_PATH=./data/images.db
-ENV LOG_LEVEL=info
 ENV HASH_THRESHOLD=8
 
 # Expose port (not required for the Discord bot, but useful for health checks)
