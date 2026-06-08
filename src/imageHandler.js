@@ -1,6 +1,7 @@
 const sharp = require('sharp');
 const imageHash = require('image-hash');
 const logger = require('./logger');
+const { hammingDistance } = require('./hashUtils');
 
 class ImageHandler {
     constructor(db) {
@@ -61,27 +62,16 @@ class ImageHandler {
 
     async findDuplicate(hash, guildId, threshold = null) {
         try {
-            // Search for similar hashes in the database.
-            const candidates = this.db.findByHashPrefix(hash, guildId);
-            
-            if (!candidates || candidates.length === 0) {
-                return null;
-            }
+            const effectiveThreshold = threshold ?? (parseInt(process.env.HASH_THRESHOLD, 10) || 8);
+            const candidate = this.db.findSimilarHash(hash, guildId, effectiveThreshold);
 
-            // Calculate Hamming distance for each candidate.
-            for (const candidate of candidates) {
-                const distance = this.hammingDistance(hash, candidate.hash);
-                const effectiveThreshold = threshold ?? (parseInt(process.env.HASH_THRESHOLD, 10) || 8);
+            if (!candidate) return null;
 
-                if (distance <= effectiveThreshold) {
-                    return {
-                        ...candidate,
-                        similarity: Math.round((1 - distance / 64) * 100)
-                    };
-                }
-            }
-
-            return null;
+            const bitLength = hash.length * 4;
+            return {
+                ...candidate,
+                similarity: Math.floor((1 - candidate.distance / bitLength) * 100)
+            };
 
         } catch (error) {
             logger.error('Duplicate search error:', error);
@@ -90,19 +80,7 @@ class ImageHandler {
     }
 
     hammingDistance(hash1, hash2) {
-        let distance = 0;
-        const len = Math.min(hash1.length, hash2.length);
-
-        for (let i = 0; i < len; i++) {
-            const bin1 = parseInt(hash1[i], 16).toString(2).padStart(4, '0');
-            const bin2 = parseInt(hash2[i], 16).toString(2).padStart(4, '0');
-
-            for (let j = 0; j < 4; j++) {
-                if (bin1[j] !== bin2[j]) distance++;
-            }
-        }
-
-        return distance;
+        return hammingDistance(hash1, hash2);
     }
 
     async saveImage(data) {

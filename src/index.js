@@ -3,6 +3,7 @@ const Database = require('./database');
 const ImageHandler = require('./imageHandler');
 const logger = require('./logger');
 const { commands } = require('./commands');
+const { imageUrlsMatch } = require('./urlUtils');
 require('dotenv').config();
 
 class DuplicateBot {
@@ -396,14 +397,20 @@ class DuplicateBot {
 
     messageStillContainsImage(message, imageUrl) {
         const attachmentStillExists = message.attachments.some(attachment =>
-            attachment.url === imageUrl || attachment.proxyURL === imageUrl
+            imageUrlsMatch(attachment.url, imageUrl) ||
+            imageUrlsMatch(attachment.proxyURL, imageUrl)
         );
 
         const embedStillExists = message.embeds.some(embed =>
-            this.getEmbedImageCandidates(embed).includes(imageUrl)
+            this.getEmbedImageCandidates(embed).some(candidate =>
+                imageUrlsMatch(candidate, imageUrl)
+            )
         );
 
-        return attachmentStillExists || embedStillExists || message.content.includes(imageUrl);
+        const contentStillContainsImage = this.extractImageUrlsFromContent(message.content)
+            .some(candidate => imageUrlsMatch(candidate, imageUrl));
+
+        return attachmentStillExists || embedStillExists || contentStillContainsImage;
     }
 
     hasImageUrls(content) {
