@@ -27,4 +27,6 @@ if (process.env.NODE_ENV !== 'production') {
     }));
 }
 
+logger.isDebugEnabled = () => logger.isLevelEnabled('debug');
+
 module.exports = logger;

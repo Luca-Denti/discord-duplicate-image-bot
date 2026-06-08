@@ -32,7 +32,7 @@ class DuplicateBot {
 
         this.client.on(Events.MessageCreate, async (message) => {
             if (message.author.bot) return;
-            this.logDebugMessage(message);
+            this.logDebugMessage(message, 'messageCreate');
             await this.handleMessage(message);
         });
 
@@ -87,10 +87,21 @@ class DuplicateBot {
         }
     }
 
-    logDebugMessage(message) {
+    logDebugMessage(message, event = 'message') {
         if (!logger.isDebugEnabled()) return;
 
-        logger.debug('MessageCreate payload', {
+        logger.debug('Discord message payload', {
+            event,
+            payload: this.serializeMessageForDebug(message)
+        });
+    }
+
+    logDebugMessageAnalysis(message, status, details = {}) {
+        if (!logger.isDebugEnabled()) return;
+
+        logger.debug('Message analysis', {
+            status,
+            details,
             payload: this.serializeMessageForDebug(message)
         });
     }
@@ -193,7 +204,25 @@ class DuplicateBot {
                 messageId: message.reference.messageId,
                 failIfNotExists: message.reference.failIfNotExists
             } : null,
-            interactionMetadata: message.interactionMetadata?.toJSON?.() ?? message.interactionMetadata ?? null
+            interactionMetadata: message.interactionMetadata?.toJSON?.() ?? message.interactionMetadata ?? null,
+            url: message.url,
+            type: message.type,
+            system: message.system,
+            pinned: message.pinned,
+            tts: message.tts,
+            nonce: message.nonce,
+            position: message.position,
+            webhookId: message.webhookId,
+            applicationId: message.applicationId,
+            activity: message.activity,
+            cleanContent: message.cleanContent,
+            editable: message.editable,
+            deletable: message.deletable,
+            bulkDeletable: message.bulkDeletable,
+            crosspostable: message.crosspostable,
+            partial: message.partial,
+            editedAt: message.editedAt?.toISOString() ?? null,
+            raw: message.toJSON?.() ?? null
         };
     }
 
@@ -264,27 +293,60 @@ class DuplicateBot {
 
     async handleMessage(message) {
         try {
-            if (!message.guild) return;
+            if (!message.guild) {
+                this.logDebugMessageAnalysis(message, 'skipped_no_guild');
+                return;
+            }
 
             const images = await this.extractImages(message);
-            if (!images.length) return;
+            this.logDebugMessageAnalysis(message, 'images_extracted', {
+                imagesFound: images.length,
+                images
+            });
+
+            if (!images.length) {
+                this.logDebugMessageAnalysis(message, 'completed_no_images', {
+                    duplicateFound: false
+                });
+                return;
+            }
 
             for (const image of images) {
                 const hash = await this.generateHashFromImage(image);
-                if (!hash) continue;
+                if (!hash) {
+                    this.logDebugMessageAnalysis(message, 'image_hash_failed', {
+                        duplicateFound: false,
+                        image
+                    });
+                    continue;
+                }
 
                 const duplicate = await this.findValidDuplicateOrReplaceStale(message, hash);
 
                 if (duplicate) {
+                    this.logDebugMessageAnalysis(message, 'duplicate_found', {
+                        duplicateFound: true,
+                        image,
+                        hash,
+                        duplicate
+                    });
                     await this.handleDuplicate(message, duplicate, image);
                 } else {
-                    await this.imageHandler.saveImage({
+                    const saveResult = await this.imageHandler.saveImage({
                         hash,
                         guildId: message.guild.id,
                         channelId: message.channel.id,
                         messageId: message.id,
                         authorId: message.author.id,
                         url: image.url
+                    });
+
+                    this.logDebugMessageAnalysis(message, 'no_duplicate_saved', {
+                        duplicateFound: false,
+                        image,
+                        hash,
+                        saved: saveResult.changes > 0,
+                        saveResult
                     });
                 }
             }
@@ -514,6 +576,7 @@ class DuplicateBot {
             for (const [, message] of messages) {
                 stats.messagesScanned++;
                 if (message.author.bot) continue;
+
                 const images = await this.extractImages(message);
                 if (!images.length) continue;
                 stats.imagesFound += images.length;

@@ -42,6 +42,8 @@ HASH_THRESHOLD=8
 LOG_LEVEL=info
 ```
 
+Set `LOG_LEVEL=debug` to write a full debug trace for every live message analyzed, including the serialized Discord payload, extracted image candidates, generated hashes, duplicate matches, non-duplicate saves, and skipped messages.
+
 ## Commands
 
 | Command | Description | Permissions |
